@@ -106,6 +106,18 @@ export class Commit {
 
             respond()
 
+            // A navigation can destroy this instance while its request is in flight.
+            // Settle callers, but never apply its response to a restored component,
+            // even when the restored component has the same `wire:id`.
+            if (this.component.el.__livewire !== this.component) {
+                this.calls.forEach(({ handleReturn }, index) => {
+                    handleReturn(effects.returns?.[index])
+                })
+                this.resolvers.forEach(resolve => resolve())
+
+                return
+            }
+
             // Wrap in Alpine.transaction() to defer reactive effects until
             // after the morph completes. Without this, Alpine plugins like
             // x-mask can fire synthetic input events during the reactive

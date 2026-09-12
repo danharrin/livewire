@@ -1,9 +1,9 @@
 import { getDirectives } from '@/directives'
 import { on } from '@/hooks'
-import { Bag } from '@/utils'
+import { WeakBag } from '@/utils'
 import Alpine from 'alpinejs'
 
-let cleanups = new Bag
+let cleanups = new WeakBag
 
 // Adding a setTimeout here so that these event listeners are
 // registered AFTER most other event listenrs, this way, we
@@ -15,22 +15,22 @@ on('directive.init', ({ el, directive, cleanup, component }) => setTimeout(() =>
     // submission returns and the new DOM lacks these additions...
     el.addEventListener('submit', () => {
         // If using wire:submit="$parent...", we will need to use
-        // the parent ID as a reference for undoing because it's
-        // the ID that will come back from the network request.
-        let componentId = directive.expression.startsWith('$parent')
-            ? component.parent.id
-            : component.id
+        // the parent instance as a reference for undoing because it's
+        // the instance that will receive the network response.
+        let targetComponent = directive.expression.startsWith('$parent')
+            ? component.parent
+            : component
 
         let cleanup = disableForm(el)
 
-        cleanups.add(componentId, cleanup)
+        cleanups.add(targetComponent, cleanup)
     })
 }))
 
 on('commit', ({ component, respond }) => {
     respond(() => {
-        cleanups.each(component.id, i => i())
-        cleanups.remove(component.id)
+        cleanups.each(component, i => i())
+        cleanups.remove(component)
     })
 })
 

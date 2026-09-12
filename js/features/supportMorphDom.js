@@ -15,6 +15,8 @@ on('effect', ({ component, effects }) => {
     // Alpine effects (that are processed via flushJobs in scheduler).
     queueMicrotask(() => {
         queueMicrotask(() => {
+            if (component.el.__livewire !== component) return
+
             morph(component, component.el, html)
         })
     })
