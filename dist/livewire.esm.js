@@ -7983,26 +7983,6 @@ var require_module_cjs8 = __commonJS({
 });
 
 // js/utils.js
-var Bag = class {
-  constructor() {
-    this.arrays = {};
-  }
-  add(key, value) {
-    if (!this.arrays[key])
-      this.arrays[key] = [];
-    this.arrays[key].push(value);
-  }
-  remove(key) {
-    if (this.arrays[key])
-      delete this.arrays[key];
-  }
-  get(key) {
-    return this.arrays[key] || [];
-  }
-  each(key, callback) {
-    return this.get(key).forEach(callback);
-  }
-};
 var WeakBag = class {
   constructor() {
     this.arrays = /* @__PURE__ */ new WeakMap();
@@ -8664,6 +8644,13 @@ var Commit = class {
     let handleResponse = (response) => {
       let { snapshot, effects } = response;
       respond();
+      if (this.component.el.__livewire !== this.component) {
+        this.calls.forEach(({ handleReturn }, index) => {
+          handleReturn(effects.returns?.[index]);
+        });
+        this.resolvers.forEach((resolve) => resolve());
+        return;
+      }
       import_alpinejs2.default.transaction(() => {
         this.component.mergeNewSnapshot(snapshot, effects, updates);
         this.component.processEffects(this.component.effects);
@@ -10933,6 +10920,8 @@ on("effect", ({ component, effects }) => {
     return;
   queueMicrotask(() => {
     queueMicrotask(() => {
+      if (component.el.__livewire !== component)
+        return;
       morph2(component, component.el, html);
     });
   });
@@ -10965,20 +10954,20 @@ function dispatchEvents(component, dispatches) {
 
 // js/features/supportDisablingFormsDuringRequest.js
 var import_alpinejs10 = __toESM(require_module_cjs());
-var cleanups = new Bag();
+var cleanups = new WeakBag();
 on("directive.init", ({ el, directive: directive2, cleanup, component }) => setTimeout(() => {
   if (directive2.value !== "submit")
     return;
   el.addEventListener("submit", () => {
-    let componentId = directive2.expression.startsWith("$parent") ? component.parent.id : component.id;
+    let targetComponent = directive2.expression.startsWith("$parent") ? component.parent : component;
     let cleanup2 = disableForm(el);
-    cleanups.add(componentId, cleanup2);
+    cleanups.add(targetComponent, cleanup2);
   });
 }));
 on("commit", ({ component, respond }) => {
   respond(() => {
-    cleanups.each(component.id, (i) => i());
-    cleanups.remove(component.id);
+    cleanups.each(component, (i) => i());
+    cleanups.remove(component);
   });
 });
 function disableForm(formEl) {

@@ -296,26 +296,6 @@
   });
 
   // js/utils.js
-  var Bag = class {
-    constructor() {
-      this.arrays = {};
-    }
-    add(key, value) {
-      if (!this.arrays[key])
-        this.arrays[key] = [];
-      this.arrays[key].push(value);
-    }
-    remove(key) {
-      if (this.arrays[key])
-        delete this.arrays[key];
-    }
-    get(key) {
-      return this.arrays[key] || [];
-    }
-    each(key, callback) {
-      return this.get(key).forEach(callback);
-    }
-  };
   var WeakBag = class {
     constructor() {
       this.arrays = /* @__PURE__ */ new WeakMap();
@@ -4269,6 +4249,13 @@ ${expression ? 'Expression: "' + expression + '"\n\n' : ""}`, el);
       let handleResponse = (response) => {
         let { snapshot, effects } = response;
         respond();
+        if (this.component.el.__livewire !== this.component) {
+          this.calls.forEach(({ handleReturn }, index) => {
+            handleReturn(effects.returns?.[index]);
+          });
+          this.resolvers.forEach((resolve) => resolve());
+          return;
+        }
         module_default.transaction(() => {
           this.component.mergeNewSnapshot(snapshot, effects, updates);
           this.component.processEffects(this.component.effects);
@@ -10063,6 +10050,8 @@ ${expression ? 'Expression: "' + expression + '"\n\n' : ""}`, el);
       return;
     queueMicrotask(() => {
       queueMicrotask(() => {
+        if (component.el.__livewire !== component)
+          return;
         morph2(component, component.el, html);
       });
     });
@@ -10094,20 +10083,20 @@ ${expression ? 'Expression: "' + expression + '"\n\n' : ""}`, el);
   }
 
   // js/features/supportDisablingFormsDuringRequest.js
-  var cleanups = new Bag();
+  var cleanups = new WeakBag();
   on2("directive.init", ({ el, directive: directive3, cleanup: cleanup2, component }) => setTimeout(() => {
     if (directive3.value !== "submit")
       return;
     el.addEventListener("submit", () => {
-      let componentId = directive3.expression.startsWith("$parent") ? component.parent.id : component.id;
+      let targetComponent = directive3.expression.startsWith("$parent") ? component.parent : component;
       let cleanup3 = disableForm(el);
-      cleanups.add(componentId, cleanup3);
+      cleanups.add(targetComponent, cleanup3);
     });
   }));
   on2("commit", ({ component, respond }) => {
     respond(() => {
-      cleanups.each(component.id, (i) => i());
-      cleanups.remove(component.id);
+      cleanups.each(component, (i) => i());
+      cleanups.remove(component);
     });
   });
   function disableForm(formEl) {
