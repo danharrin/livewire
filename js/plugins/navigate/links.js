@@ -96,8 +96,9 @@ export function isSamePageFragment(destination) {
         && destination.href.includes('#')
 }
 
-export function visitNatively(destination) {
-    window.location.href = destination.href
+export function visitNatively(destination, replace = false) {
+    if (replace) window.location.replace(destination.href)
+    else window.location.href = destination.href
 }
 
 export function linkShouldBeHandledNatively(linkEl, destination = extractDestinationFromLink(linkEl)) {

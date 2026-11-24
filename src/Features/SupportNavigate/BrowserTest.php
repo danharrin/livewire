@@ -74,6 +74,18 @@ class BrowserTest extends \Tests\BrowserTestCase
             Route::get('/second-animated-transition', fn () => (new SecondAnimatedTransitionPage)())->middleware('web');
             Route::get('/first-outside', FirstPageWithLinkOutside::class)->middleware('web');
             Route::get('/redirect-to-second', fn () => redirect()->to('/second'));
+            Route::get('/navigate-resource', fn () => response(
+                base64_decode('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7')
+                    . '<script>sessionStorage.setItem("navigate-resource-script", "executed")</script>',
+                200,
+                ['Content-Type' => 'image/gif'],
+            ));
+            Route::get('/redirect-to-navigate-resource', fn () => redirect()->to('/navigate-resource'));
+            Route::get('/navigate-attachment', fn () => response(
+                '<script>sessionStorage.setItem("navigate-resource-script", "executed")</script>',
+                200,
+                ['Content-Type' => 'text/html; charset=UTF-8', 'Content-Disposition' => 'attachment; filename="page.html"'],
+            ));
             Route::get('/second', SecondPage::class)->middleware('web');
             Route::get('/third', ThirdPage::class)->middleware('web');
             Route::get('/fourth', FourthPage::class)->middleware('web');
@@ -1633,6 +1645,204 @@ class BrowserTest extends \Tests\BrowserTestCase
                 ->pause(500)
                 ->assertPathIsNot('/no-javascript');
         });
+    }
+
+    public function test_navigate_visits_non_html_responses_natively()
+    {
+        Livewire::visit(new class extends Component {
+            public function render()
+            {
+                return <<<'HTML'
+                    <div>
+                        <a href="/navigate-resource" wire:navigate dusk="resource">Resource</a>
+                    </div>
+                HTML;
+            }
+        })
+            ->tap(fn ($b) => $b->script([
+                'sessionStorage.removeItem("navigate-resource-script")',
+                'window.beforeResourceNavigation = true',
+            ]))
+            ->click('@resource')
+            ->waitForLocation('/navigate-resource')
+            ->assertScript('sessionStorage.getItem("navigate-resource-script")', null)
+            ->assertScript('document.contentType', 'image/gif')
+            ->assertScript('window.beforeResourceNavigation', null)
+            ->assertScript('document.querySelector("img").naturalWidth', 1);
+    }
+
+    public function test_prefetched_non_html_responses_and_redirects_are_visited_natively()
+    {
+        $browser = Livewire::visit(FirstPage::class);
+
+        foreach (['/navigate-resource', '/redirect-to-navigate-resource'] as $destination) {
+            $browser
+                ->visit('/first')
+                ->tap(fn ($b) => $b->script('document.querySelector(\'[dusk="link.to.second"]\').href = '.json_encode($destination)))
+                ->tap(fn ($b) => $b->script(<<<'JS'
+                    sessionStorage.removeItem('navigate-resource-script')
+                    sessionStorage.setItem('resource-prefetch-count', '0')
+                    window.beforeResourceNavigation = true
+                    window.resourcePrefetchFinished = false
+                    let originalFetch = window.fetch
+                    window.fetch = async (...args) => {
+                        sessionStorage.setItem('resource-prefetch-count', Number(sessionStorage.getItem('resource-prefetch-count')) + 1)
+                        let response = await originalFetch(...args)
+                        await response.clone().text()
+                        window.resourcePrefetchFinished = true
+                        return response
+                    }
+                JS))
+                ->mouseover('@link.to.second')
+                ->waitForScript('window.resourcePrefetchFinished')
+                // Prefetching alone must neither navigate nor execute the resource.
+                ->assertPathIs('/first')
+                ->assertScript('sessionStorage.getItem("navigate-resource-script")', null)
+                ->click('@link.to.second')
+                ->waitForLocation('/navigate-resource')
+                ->assertScript('document.contentType', 'image/gif')
+                ->assertScript('sessionStorage.getItem("navigate-resource-script")', null)
+                ->assertScript('sessionStorage.getItem("resource-prefetch-count")', '1')
+                ->assertScript('window.beforeResourceNavigation', null)
+                ->assertScript('document.querySelector("img").naturalWidth', 1)
+                ->back()
+                ->waitForLocation('/first')
+                ->assertSee('On first')
+                ->forward()
+                ->waitForLocation('/navigate-resource')
+                ->assertScript('document.contentType', 'image/gif');
+        }
+    }
+
+    public function test_html_responses_with_a_charset_still_navigate_without_reloading()
+    {
+        Livewire::visit(FirstPage::class)
+            ->visit('/first')
+            ->tap(fn ($b) => $b->script(<<<'JS'
+                window.beforeHtmlNavigation = true
+                let originalFetch = window.fetch
+                window.fetch = async (...args) => {
+                    let response = await originalFetch(...args)
+                    window.navigationContentType = response.headers.get('Content-Type')
+                    return response
+                }
+            JS))
+            ->waitForNavigate()->click('@link.to.second')
+            ->assertSee('On second')
+            ->assertScript('window.navigationContentType.toLowerCase()', 'text/html; charset=utf-8')
+            ->assertScript('window.beforeHtmlNavigation', true);
+    }
+
+    public function test_a_superseded_non_html_prefetch_does_not_navigate_away_from_the_new_page()
+    {
+        Livewire::visit(FirstPage::class)
+            ->visit('/first')
+            ->tap(fn ($b) => $b->script(<<<'JS'
+                document.querySelector('[dusk="link.to.second"]').href = '/navigate-resource'
+                let originalFetch = window.fetch
+                window.fetch = async (...args) => {
+                    let response = await originalFetch(...args)
+                    if (args[0] !== '/navigate-resource') return response
+
+                    return new Promise(resolve => {
+                        window.releaseResourceResponse = () => {
+                            resolve(response)
+                            setTimeout(() => window.resourceResponseDelivered = true)
+                        }
+                    })
+                }
+            JS))
+            ->click('@link.to.second')
+            ->waitForScript('typeof window.releaseResourceResponse === "function"')
+            ->waitForNavigate(fn ($b) => $b->script('Livewire.navigate("/second")'))
+            ->assertSee('On second')
+            ->tap(fn ($b) => $b->script('window.releaseResourceResponse()'))
+            ->waitForScript('window.resourceResponseDelivered === true')
+            ->assertPathIs('/second')
+            ->assertSee('On second')
+            ->waitUntilMissing('#nprogress')
+            ->assertConsoleLogHasNoErrors();
+    }
+
+    public function test_uncached_history_navigation_to_non_html_replaces_the_current_entry()
+    {
+        Livewire::visit(FirstPage::class)
+            ->visit('/first')
+            ->tap(fn ($b) => $b->script(<<<'JS'
+                history.pushState({ alpine: { snapshotIdx: 'uncached-resource', url: '/navigate-resource' } }, '', '/navigate-resource')
+                history.pushState({}, '', '/first?after-resource')
+                sessionStorage.setItem('resource-history-length', history.length)
+            JS))
+            ->back()
+            ->waitForScript('document.contentType === "image/gif"')
+            ->assertPathIs('/navigate-resource')
+            ->assertScript('history.length === Number(sessionStorage.getItem("resource-history-length"))', true)
+            ->forward()
+            ->waitForScript('location.pathname + location.search === "/first?after-resource"')
+            ->back()
+            ->waitForLocation('/navigate-resource')
+            ->back()
+            ->waitForLocation('/first');
+    }
+
+    public function test_html_attachments_do_not_swap_the_page_or_leave_the_progress_bar_running()
+    {
+        Livewire::visit(new class extends Component {
+            public function download()
+            {
+                $this->redirect('/navigate-attachment', navigate: true);
+            }
+
+            public function render()
+            {
+                return <<<'HTML'
+                    <form wire:submit="download">
+                        <button type="submit" dusk="download">Download attachment</button>
+                        <a href="/second" wire:navigate dusk="link.to.second">Go to second page</a>
+                    </form>
+                HTML;
+            }
+        })
+            ->tap(fn ($b) => $b->script(<<<'JS'
+                sessionStorage.removeItem('navigate-resource-script')
+                window.attachmentSourceUrl = location.href
+                window.attachmentFinishes = 0
+                window.resourceSwapCount = 0
+                Livewire.interceptRequest(({ onFinish }) => onFinish(() => window.attachmentFinishes++))
+                document.addEventListener('livewire:navigating', () => window.resourceSwapCount++)
+            JS))
+            ->waitForLivewire()->click('@download')
+            ->waitUntilEnabled('@download')
+            ->assertScript('location.href === window.attachmentSourceUrl', true)
+            ->assertSee('Download attachment')
+            ->assertScript('sessionStorage.getItem("navigate-resource-script")', null)
+            ->assertScript('window.resourceSwapCount', 0)
+            ->assertScript('window.attachmentFinishes', 1)
+            ->waitUntilMissing('#nprogress')
+            ->waitForNavigate()->click('@link.to.second')
+            ->assertSee('On second');
+    }
+
+    public function test_cancelled_navigate_requests_do_not_fall_back_to_native_navigation()
+    {
+        Livewire::visit(FirstPage::class)
+            ->visit('/first')
+            ->tap(fn ($b) => $b->script(<<<'JS'
+                Object.defineProperty(navigator, 'onLine', { get: () => false, configurable: true })
+                let originalFetch = window.fetch
+                window.fetch = (...args) => originalFetch(...args).finally(() => window.resourceCancellationSettled = true)
+                Livewire.hook('navigate.request', ({ options }) => {
+                    let controller = new AbortController()
+                    options.signal = controller.signal
+                    controller.abort()
+                })
+                Livewire.navigate('/navigate-resource')
+            JS))
+            ->waitForScript('window.resourceCancellationSettled === true')
+            ->assertPathIs('/first')
+            ->assertSee('On first')
+            ->waitUntilMissing('#nprogress')
+            ->assertConsoleLogHasNoErrors();
     }
 
     public function test_failed_navigate_prefetch_does_not_trigger_an_unhandled_promise_rejection()

@@ -687,7 +687,15 @@ export async function sendNavigateRequest(uri, callback, errorCallback) {
 
         let destination = getDestination(uri, response)
 
-        let html = await response.text()
+        let contentType = response.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase()
+        let disposition = response.headers.get('Content-Disposition')?.split(';')[0].trim().toLowerCase()
+
+        // Only HTML pages can be swapped into this document. Carry a null body
+        // through prefetching too, so clicking a cached resource still visits it
+        // natively without ever parsing its contents as HTML...
+        let html = response.ok && (contentType !== 'text/html' || disposition === 'attachment')
+            ? null
+            : await response.text()
 
         let status = response.status
 

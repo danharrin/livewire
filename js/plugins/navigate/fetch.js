@@ -21,7 +21,7 @@ export function performFetch(uri, callback, errorCallback) {
         // The browser still enforces the original page's CSP, so rewrite the nonces
         // this response's own CSP authorized to the original page's nonce. Any
         // others are left alone for the browser to deal with...
-        html = replaceNoncesInHtml(html, getNoncesFromCspHeaders(headers))
+        if (html !== null) html = replaceNoncesInHtml(html, getNoncesFromCspHeaders(headers))
 
         callback(html, destination, status)
     }, errorCallback).catch(() => {})

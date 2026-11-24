@@ -9,7 +9,7 @@ import { packUpPersistedPopovers, unPackPersistedPopovers } from "./popover"
 import { transitionPageSwap } from "./transition"
 import { swapCurrentPageWithNewHtml } from "./page"
 import { fetchHtml } from "./fetch"
-import { startNavigation } from "./navigation"
+import { getActiveNavigation, startNavigation } from "./navigation"
 
 let enablePersist = true
 let showProgressBar = true
@@ -104,13 +104,16 @@ export default function (Alpine) {
         showProgressBar && showAndStartProgressBar()
 
         fetchHtmlOrUsePrefetchedHtml(destination, (html, finalDestination) => {
-            // The request may have been redirected off to another origin. We can't
-            // swap that page into this document, so let the browser visit it...
-            if (! isSameOrigin(finalDestination)) {
+            if (getActiveNavigation() !== navigation) return
+
+            // Resources and cross-origin redirects can't be swapped into this
+            // document. Let the browser handle the final destination instead...
+            if (html === null || ! isSameOrigin(finalDestination)) {
                 navigation.ready()
                 navigation.finish()
+                showProgressBar && finishAndHideProgressBar()
 
-                return visitNatively(finalDestination)
+                return visitNatively(finalDestination, ! shouldPushToHistoryState)
             }
 
             navigation.ready()
@@ -171,6 +174,8 @@ export default function (Alpine) {
                 })
             })
         }, (error) => {
+            if (getActiveNavigation() !== navigation) return
+
             navigation.cancel()
 
             showProgressBar && finishAndHideProgressBar()
